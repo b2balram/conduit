@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Config configures Kaflume's queue-neutral processing behavior. Transport
+// Config configures Conduit's queue-neutral processing behavior. Transport
 // connection settings belong to the selected Adapter.
 type Config struct {
 	BatchSize int
@@ -14,8 +14,14 @@ type Config struct {
 }
 
 func (c Config) validate() error {
-	if c.BatchSize < 0 { return fmt.Errorf("kaflume: batch size must not be negative") }
-	if c.BatchWait < 0 { return fmt.Errorf("kaflume: batch wait must not be negative") }
-	if c.BatchSize > 0 && c.BatchWait == 0 { return errors.New("kaflume: batch wait is required when batch size is set") }
+	if c.BatchSize < 0 {
+		return fmt.Errorf("conduit: batch size must not be negative")
+	}
+	if c.BatchWait < 0 {
+		return fmt.Errorf("conduit: batch wait must not be negative")
+	}
+	if c.BatchSize > 0 && c.BatchWait == 0 {
+		return errors.New("conduit: batch wait is required when batch size is set")
+	}
 	return nil
 }
