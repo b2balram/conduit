@@ -91,7 +91,8 @@ for concurrent calls.
 
 ## Dependency direction
 
-The core package has no dependency on Kafka, a logger, or a metrics SDK. The
-`kafka` package depends on the core and Sarama. Applications depend on the core,
-the adapters they select, and their own observability libraries. This direction
-keeps future RabbitMQ and Redis Streams adapters independent of each other.
+The core package has no dependency on Kafka, RabbitMQ, NATS, a logger, or a
+metrics SDK. Each adapter package depends only on the core and its native client.
+Applications depend on the core, the adapters they select, and their own
+observability libraries. This direction keeps all transport implementations
+independent of each other.

@@ -119,6 +119,60 @@ concurrent calls when supplied.
 Conduit never logs message payloads or keys. Metric attributes exclude keys,
 offsets, and partitions to avoid sensitive data and unbounded time series.
 
+## RabbitMQ
+
+RabbitMQ uses manual acknowledgements. `Prefetch` limits unacknowledged messages;
+when omitted in batch mode it defaults to the configured Conduit batch size.
+
+```go
+adapter, err := rabbitmq.New(rabbitmq.Config{
+	URL:         os.Getenv("AMQP_URL"),
+	Queue:       "orders.created",
+	ConsumerTag: "orders-service",
+	Prefetch:    250,
+	Heartbeat:   30 * time.Second,
+	TLS: rabbitmq.TLSConfig{
+		CAFile:   "/run/secrets/rabbitmq/ca.pem",
+		CertFile: "/run/secrets/rabbitmq/client.pem",
+		KeyFile:  "/run/secrets/rabbitmq/client-key.pem",
+	},
+})
+```
+
+Declare exchanges, queues, bindings, and broker-side dead-letter exchanges
+outside Conduit. A processing failure closes the consume run without
+acknowledging the delivery, allowing RabbitMQ to requeue it when the channel
+closes. Conduit's `DeadLetterHandler` is an application-level alternative when
+the failed payload must be republished with custom metadata.
+
+## NATS JetStream
+
+The NATS adapter intentionally targets JetStream rather than Core NATS because
+JetStream provides durable consumers, explicit acknowledgements, and
+redelivery.
+
+```go
+adapter, err := nats.New(nats.Config{
+	URLs:           []string{"nats://nats-1:4222", "nats://nats-2:4222"},
+	Stream:         "ORDERS",
+	Consumer:       "orders-service",
+	FilterSubject:  "orders.created",
+	ConnectionName: "orders-service",
+	CredentialsFile: "/run/secrets/nats/orders.creds",
+	AckWait:        30 * time.Second,
+	MaxDeliver:     10,
+	DoubleAck:      true,
+	AckTimeout:     5 * time.Second,
+})
+```
+
+The adapter creates or updates a durable pull consumer with explicit
+acknowledgements. `DoubleAck` waits for the server to confirm the acknowledgement
+and is recommended when avoiding acknowledgement loss is more important than
+maximum throughput. JetStream's `MaxDeliver` limits broker redelivery; Conduit's
+retry policy controls immediate in-process attempts before a message is left for
+broker redelivery or passed to the application DLQ handler.
+
 ## 5. Build and run the consumer
 
 ```go

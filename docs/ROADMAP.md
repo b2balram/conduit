@@ -10,6 +10,7 @@ and easier to operate without coupling the core to a specific vendor.
   ordering, and error propagation.
 - Production Kafka configuration for TLS, mTLS, SASL, timeouts, static
   membership, cooperative rebalancing, and advanced Sarama settings.
+- RabbitMQ and NATS JetStream adapters with manual/durable acknowledgement.
 
 ## Near term
 
@@ -27,7 +28,7 @@ and easier to operate without coupling the core to a specific vendor.
   consuming, rebalancing, and stopped states.
 - Add first-party Protobuf SerDe support and documented recipes for Avro/schema
   registries.
-- Add RabbitMQ and Redis Streams adapters with the conformance suite.
+- Add a Redis Streams adapter with the conformance suite.
 
 ## Later
 

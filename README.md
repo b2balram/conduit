@@ -10,11 +10,13 @@
 
 ## Install
 
-Conduit requires Go 1.25 or newer.
+Conduit requires Go 1.26 or newer.
 
 ```bash
 go get github.com/b2balram/conduit
 go get github.com/b2balram/conduit/kafka
+go get github.com/b2balram/conduit/rabbitmq
+go get github.com/b2balram/conduit/nats
 ```
 
 ## Kafka example
@@ -119,7 +121,8 @@ Adapters implement `conduit.Adapter`, converting their native messages into `con
 | Adapter | Status |
 | --- | --- |
 | `conduit/kafka` | Available, backed by IBM Sarama |
-| `conduit/rabbitmq` | Planned |
+| `conduit/rabbitmq` | Available, backed by the official AMQP 0.9.1 client |
+| `conduit/nats` | Available for durable NATS JetStream pull consumers |
 | `conduit/redisstreams` | Planned |
 
 Adapter maintainers can use [`adaptertest`](adaptertest/README.md) to verify the
