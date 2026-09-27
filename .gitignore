@@ -1,0 +1,7 @@
+# Go build output
+bin/
+*.test
+coverage.out
+
+# Codex scratch space
+work/
