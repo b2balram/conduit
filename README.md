@@ -2,6 +2,12 @@
 
 **Conduit** is a small, typed Go library for consuming messages from any queue. Your application supplies a processor and a SerDe; an adapter connects it to a transport. Kafka is supported today, with RabbitMQ, Redis Streams, and other transports able to join through the same adapter contract.
 
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — component boundaries, message flow, and delivery guarantees
+- [Integration guide](docs/INTEGRATION.md) — production setup, batching, SerDes, metrics, logging, and shutdown
+- [Roadmap](docs/ROADMAP.md) — prioritized improvements and contribution opportunities
+
 ## Install
 
 ```bash
