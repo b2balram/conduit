@@ -11,6 +11,8 @@ import (
 type Config struct {
 	BatchSize int
 	BatchWait time.Duration
+	Metrics   Metrics
+	Logger    Logger
 }
 
 func (c Config) validate() error {

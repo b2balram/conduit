@@ -44,6 +44,39 @@ consumer, err := conduit.New(conduit.Config{
 
 Conduit acknowledges a delivery only after the processor returns successfully. Processors should therefore be idempotent: transports with at-least-once delivery may replay a successfully handled message after a crash or rebalance.
 
+## Metrics and logging
+
+Observability is optional and vendor-neutral. Implement `conduit.Metrics` and
+`conduit.Logger`, or use the function adapters, to bridge Conduit to Prometheus,
+OpenTelemetry, `log/slog`, Zap, Zerolog, or another backend:
+
+```go
+config := conduit.Config{
+	Metrics: conduit.MetricsFunc(func(ctx context.Context, metric conduit.Metric) {
+		collector.Record(metric.Name, metric.Value, metric.Duration, metric.Attributes)
+	}),
+	Logger: conduit.LoggerFunc(func(ctx context.Context, level conduit.LogLevel, message string, fields ...conduit.Field) {
+		applicationLogger.Log(ctx, level, message, fields)
+	}),
+}
+```
+
+Conduit reports received, successful, and failed message counts; observed batch
+sizes; and deserialize, processor, and acknowledgement durations. Topic and
+failure-stage attributes are bounded metadata; offsets and keys are deliberately
+excluded from metric attributes to avoid high-cardinality series.
+
+Logging records lifecycle events and failures. Conduit does not log message keys
+or payloads, which may contain sensitive data.
+
+## Errors
+
+Processing failures are returned as `*conduit.Error` with a stable `Stage`
+(`transport`, `deserialize`, `process`, or `acknowledge`) and message location.
+The original cause is retained, so callers can use `errors.Is` and `errors.As`.
+An error prevents acknowledgement of the failing message; processors should be
+idempotent because previously processed records can be delivered again.
+
 ## Adapter model
 
 Adapters implement `conduit.Adapter`, converting their native messages into `conduit.Delivery` values. The core decodes them, invokes processors, and calls each delivery's `Ack` only on success. This keeps application processors and SerDes independent of Kafka or any future queue.
