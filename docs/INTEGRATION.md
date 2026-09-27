@@ -47,6 +47,51 @@ if err != nil {
 Use a stable group ID per logical consumer. Starting at `OffsetOldest` affects
 only a group without a committed offset.
 
+For a production cluster, configure transport security and group behavior:
+
+```go
+adapter, err := kafka.New(kafka.Config{
+	Brokers:  []string{"kafka-1:9093", "kafka-2:9093"},
+	GroupID:  "orders-service",
+	Topics:   []string{"orders.created"},
+	ClientID: "orders-service",
+	Version:  "3.8.0",
+	TLS: kafka.TLSConfig{
+		Enabled:  true,
+		CAFile:   "/run/secrets/kafka/ca.pem",
+		CertFile: "/run/secrets/kafka/client.pem", // Optional mTLS.
+		KeyFile:  "/run/secrets/kafka/client-key.pem",
+	},
+	SASL: kafka.SASLConfig{
+		Enabled:   true,
+		Mechanism: kafka.SASLSCRAMSHA512,
+		Username:  os.Getenv("KAFKA_USERNAME"),
+		Password:  os.Getenv("KAFKA_PASSWORD"),
+	},
+	Timeouts: kafka.TimeoutConfig{
+		Dial:      10 * time.Second,
+		Read:      30 * time.Second,
+		Write:     30 * time.Second,
+		Session:   30 * time.Second,
+		Heartbeat: 3 * time.Second,
+		Rebalance: 60 * time.Second,
+	},
+	Rebalance: kafka.RebalanceConfig{
+		Strategies:   []kafka.BalanceStrategy{kafka.BalanceCooperativeSticky},
+		RetryMax:     6,
+		RetryBackoff: 2 * time.Second,
+		InstanceID:   hostname,
+	},
+})
+```
+
+Supported SASL mechanisms are PLAIN, SCRAM-SHA-256, and SCRAM-SHA-512. Do not
+use PLAIN without TLS. Cooperative sticky assignment requires Kafka 2.4+ and
+all members of a group must use a compatible rollout strategy. Sarama recommends
+a two-deployment migration: first offer cooperative sticky with the existing
+eager strategy, then use cooperative sticky alone. `Config.Configure` is an
+advanced escape hatch for Sarama options not represented by typed settings.
+
 ## 4. Bridge observability
 
 Conduit deliberately does not import a metrics or logging SDK. Function adapters
@@ -155,6 +200,8 @@ if err != nil {
 			// Usually terminate and let the supervisor restart the service.
 		case conduit.StageDeserialize, conduit.StageProcess, conduit.StageAcknowledge:
 			// Record policy-specific diagnostics; the record remains unacknowledged.
+		case conduit.StageDeadLetter:
+			// DLQ storage failed; the original record remains unacknowledged.
 		}
 	}
 	return err
@@ -162,9 +209,34 @@ if err != nil {
 ```
 
 The underlying error is preserved for `errors.Is` and `errors.As`. Conduit does
-not retry inside the core today. Use an idempotent processor and let the
-transport redeliver, or implement an explicit retry/dead-letter policy at the
-application or adapter boundary.
+not retry unless explicitly configured.
+
+## Retry and dead-letter policy
+
+```go
+retry := conduit.RetryPolicy{
+	MaxAttempts: 5, // Includes the initial attempt.
+	Backoff: conduit.ExponentialBackoff{
+		Initial: 100 * time.Millisecond,
+		Max:     10 * time.Second,
+		Jitter:  0.2,
+	},
+	Retryable: func(err error) bool {
+		return !errors.Is(err, ErrInvalidOrder)
+	},
+}
+
+deadLetter := conduit.DeadLetterFunc(func(ctx context.Context, failed conduit.FailedDelivery) error {
+	return dlq.Publish(ctx, failed.Delivery, failed.Cause, failed.Attempts)
+})
+```
+
+Retries apply to processor failures. Deserialization failures are deterministic
+and go directly to the configured dead-letter handler. If no dead-letter handler
+is configured, the final processing or deserialization error is returned and the
+delivery remains unacknowledged. If dead-letter storage succeeds, Conduit
+acknowledges the original. If it or the acknowledgement fails, redelivery can
+repeat the dead-letter operation, so handlers must be idempotent.
 
 ## Production checklist
 
@@ -176,6 +248,8 @@ application or adapter boundary.
 - Choose batch limits from downstream capacity and latency requirements.
 - Cancel the run context and allow the process time to close cleanly.
 - Test malformed payloads, processor failures, duplicate delivery, and shutdown.
+- Bound retries, add jitter, classify permanent failures, and make dead-letter
+  writes idempotent.
 
 ## Writing another adapter
 
@@ -199,3 +273,6 @@ It must:
 
 Keep transport-specific authentication, TLS, and tuning in the adapter package;
 do not add them to the core `conduit.Config`.
+
+Implement `adaptertest.Harness` and run `adaptertest.Run` against a real broker
+to verify the common contract before publishing an adapter.

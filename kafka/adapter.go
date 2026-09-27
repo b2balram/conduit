@@ -11,36 +11,6 @@ import (
 	"github.com/b2balram/conduit"
 )
 
-// Config contains Kafka-specific connection and subscription settings.
-type Config struct {
-	Brokers       []string
-	GroupID       string
-	Topics        []string
-	Version       string
-	InitialOffset InitialOffset
-}
-
-// InitialOffset controls where a new Kafka consumer group starts.
-type InitialOffset int
-
-const (
-	OffsetOldest InitialOffset = iota
-	OffsetNewest
-)
-
-func (c Config) validate() error {
-	if len(c.Brokers) == 0 {
-		return errors.New("conduit/kafka: at least one broker is required")
-	}
-	if c.GroupID == "" {
-		return errors.New("conduit/kafka: group ID is required")
-	}
-	if len(c.Topics) == 0 {
-		return errors.New("conduit/kafka: at least one topic is required")
-	}
-	return nil
-}
-
 // Adapter implements conduit.Adapter for Kafka consumer groups.
 type Adapter struct{ config Config }
 
@@ -54,17 +24,9 @@ func New(config Config) (*Adapter, error) {
 
 // Consume implements conduit.Adapter.
 func (a *Adapter) Consume(ctx context.Context, settings conduit.BatchSettings, processor conduit.RawProcessor) (result error) {
-	configuration := sarama.NewConfig()
-	configuration.Consumer.Offsets.Initial = sarama.OffsetOldest
-	if a.config.InitialOffset == OffsetNewest {
-		configuration.Consumer.Offsets.Initial = sarama.OffsetNewest
-	}
-	if a.config.Version != "" {
-		version, err := sarama.ParseKafkaVersion(a.config.Version)
-		if err != nil {
-			return fmt.Errorf("conduit/kafka: invalid Kafka version: %w", err)
-		}
-		configuration.Version = version
+	configuration, err := a.config.saramaConfig()
+	if err != nil {
+		return err
 	}
 	group, err := sarama.NewConsumerGroup(a.config.Brokers, a.config.GroupID, configuration)
 	if err != nil {

@@ -11,13 +11,15 @@ import (
 type MetricName string
 
 const (
-	MetricMessagesReceived MetricName = "conduit.messages.received"
-	MetricMessagesSuccess  MetricName = "conduit.messages.success"
-	MetricMessagesFailed   MetricName = "conduit.messages.failed"
-	MetricBatchSize        MetricName = "conduit.batch.size"
-	MetricDeserializeTime  MetricName = "conduit.deserialize.duration"
-	MetricProcessTime      MetricName = "conduit.process.duration"
-	MetricAcknowledgeTime  MetricName = "conduit.acknowledge.duration"
+	MetricMessagesReceived     MetricName = "conduit.messages.received"
+	MetricMessagesSuccess      MetricName = "conduit.messages.success"
+	MetricMessagesFailed       MetricName = "conduit.messages.failed"
+	MetricMessagesRetried      MetricName = "conduit.messages.retried"
+	MetricMessagesDeadLettered MetricName = "conduit.messages.dead_lettered"
+	MetricBatchSize            MetricName = "conduit.batch.size"
+	MetricDeserializeTime      MetricName = "conduit.deserialize.duration"
+	MetricProcessTime          MetricName = "conduit.process.duration"
+	MetricAcknowledgeTime      MetricName = "conduit.acknowledge.duration"
 )
 
 // Metric is a counter increment or duration observation. Duration is set for

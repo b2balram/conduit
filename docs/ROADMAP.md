@@ -3,14 +3,16 @@
 Conduit is intentionally small. The following improvements would make it safer
 and easier to operate without coupling the core to a specific vendor.
 
+## Completed foundations
+
+- Bounded retry and dead-letter policies with backoff and retry classification.
+- Adapter conformance kit covering acknowledgement, cancellation, batching,
+  ordering, and error propagation.
+- Production Kafka configuration for TLS, mTLS, SASL, timeouts, static
+  membership, cooperative rebalancing, and advanced Sarama settings.
+
 ## Near term
 
-- Define retry and dead-letter policies with bounded attempts, backoff, and a
-  clear poison-message outcome.
-- Add an adapter conformance test kit covering acknowledgement, cancellation,
-  batching, ordering, and error propagation.
-- Expose advanced Kafka configuration safely, including TLS, SASL, timeouts,
-  cooperative rebalancing, and an escape hatch for Sarama configuration.
 - Add a CI matrix for supported Go versions, race tests on Linux, static checks,
   code coverage, and dependency/security scanning.
 - Publish API compatibility and semantic-versioning guarantees before `v1.0.0`.

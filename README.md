@@ -10,6 +10,8 @@
 
 ## Install
 
+Conduit requires Go 1.25 or newer.
+
 ```bash
 go get github.com/b2balram/conduit
 go get github.com/b2balram/conduit/kafka
@@ -50,6 +52,32 @@ consumer, err := conduit.New(conduit.Config{
 
 Conduit acknowledges a delivery only after the processor returns successfully. Processors should therefore be idempotent: transports with at-least-once delivery may replay a successfully handled message after a crash or rebalance.
 
+## Retries and dead letters
+
+Processor retries are bounded, context-aware, and disabled by default. A
+dead-letter handler is called only after attempts are exhausted; the original
+delivery is acknowledged only after that handler succeeds.
+
+```go
+config := conduit.Config{
+	Retry: conduit.RetryPolicy{
+		MaxAttempts: 4,
+		Backoff: conduit.ExponentialBackoff{
+			Initial: 100 * time.Millisecond,
+			Max:     5 * time.Second,
+			Jitter:  0.2,
+		},
+	},
+	DeadLetter: conduit.DeadLetterFunc(func(ctx context.Context, failed conduit.FailedDelivery) error {
+		return deadLetters.Publish(ctx, failed.Delivery.Value, failed.Cause)
+	}),
+}
+```
+
+Use `RetryPolicy.Retryable` to prevent retries for permanent application errors.
+Dead-letter handlers must be idempotent because an acknowledgement failure can
+cause the original delivery—and therefore the dead-letter operation—to repeat.
+
 ## Metrics and logging
 
 Observability is optional and vendor-neutral. Implement `conduit.Metrics` and
@@ -78,7 +106,8 @@ or payloads, which may contain sensitive data.
 ## Errors
 
 Processing failures are returned as `*conduit.Error` with a stable `Stage`
-(`transport`, `deserialize`, `process`, or `acknowledge`) and message location.
+(`transport`, `deserialize`, `process`, `dead_letter`, or `acknowledge`) and
+message location.
 The original cause is retained, so callers can use `errors.Is` and `errors.As`.
 An error prevents acknowledgement of the failing message; processors should be
 idempotent because previously processed records can be delivered again.
@@ -92,6 +121,9 @@ Adapters implement `conduit.Adapter`, converting their native messages into `con
 | `conduit/kafka` | Available, backed by IBM Sarama |
 | `conduit/rabbitmq` | Planned |
 | `conduit/redisstreams` | Planned |
+
+Adapter maintainers can use [`adaptertest`](adaptertest/README.md) to verify the
+shared acknowledgement, ordering, batching, cancellation, and error contract.
 
 ## SerDes
 

@@ -81,43 +81,140 @@ func (c *Consumer[T]) ProcessDeliveries(ctx context.Context, deliveries []Delive
 	}
 	c.metric(ctx, Metric{Name: MetricMessagesReceived, Value: float64(len(deliveries))})
 	c.metric(ctx, Metric{Name: MetricBatchSize, Value: float64(len(deliveries))})
-	messages := make([]Message[T], len(deliveries))
-	for i, delivery := range deliveries {
+	messages := make([]Message[T], 0, len(deliveries))
+	decoded := make([]Delivery, 0, len(deliveries))
+	for _, delivery := range deliveries {
 		started := time.Now()
 		value, err := c.serde.Deserialize(delivery.Value)
 		c.metric(ctx, Metric{Name: MetricDeserializeTime, Duration: time.Since(started), Attributes: deliveryAttributes(delivery)})
 		if err != nil {
-			return c.fail(ctx, StageDeserialize, delivery, 1, err)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if c.config.DeadLetter == nil {
+				return c.fail(ctx, StageDeserialize, delivery, 1, err)
+			}
+			if err := c.deadLetter(ctx, delivery, err, 1); err != nil {
+				return err
+			}
+			if err := c.ack(ctx, delivery); err != nil {
+				return err
+			}
+			continue
 		}
-		messages[i] = Message[T]{Value: value, Key: append([]byte(nil), delivery.Key...), Topic: delivery.Topic, Partition: delivery.Partition, Offset: delivery.Offset, Timestamp: delivery.Timestamp, Headers: cloneHeaders(delivery.Headers)}
+		messages = append(messages, Message[T]{Value: value, Key: append([]byte(nil), delivery.Key...), Topic: delivery.Topic, Partition: delivery.Partition, Offset: delivery.Offset, Timestamp: delivery.Timestamp, Headers: cloneHeaders(delivery.Headers)})
+		decoded = append(decoded, delivery)
 	}
-	started := time.Now()
+	if len(messages) == 0 {
+		return nil
+	}
 	if processor, ok := c.processor.(BatchProcessor[T]); ok {
-		if err := processor.ProcessBatch(ctx, messages); err != nil {
-			c.metric(ctx, Metric{Name: MetricProcessTime, Duration: time.Since(started)})
-			return c.fail(ctx, StageProcess, deliveries[0], len(deliveries), err)
+		attempts, err := c.processWithRetry(ctx, decoded[0], len(decoded), func() error {
+			return processor.ProcessBatch(ctx, messages)
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if c.config.DeadLetter == nil {
+				return c.fail(ctx, StageProcess, decoded[0], len(decoded), err)
+			}
+			for _, delivery := range decoded {
+				if deadLetterErr := c.deadLetter(ctx, delivery, err, attempts); deadLetterErr != nil {
+					return deadLetterErr
+				}
+			}
+			for _, delivery := range decoded {
+				if ackErr := c.ack(ctx, delivery); ackErr != nil {
+					return ackErr
+				}
+			}
+			return nil
 		}
+		for _, delivery := range decoded {
+			if err := c.ack(ctx, delivery); err != nil {
+				return err
+			}
+		}
+		c.metric(ctx, Metric{Name: MetricMessagesSuccess, Value: float64(len(decoded))})
+		return nil
 	} else {
 		processor := c.processor.(Processor[T])
 		for i, message := range messages {
-			if err := processor.Process(ctx, message); err != nil {
-				c.metric(ctx, Metric{Name: MetricProcessTime, Duration: time.Since(started)})
-				return c.fail(ctx, StageProcess, deliveries[i], 1, err)
+			attempts, err := c.processWithRetry(ctx, decoded[i], 1, func() error {
+				return processor.Process(ctx, message)
+			})
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if c.config.DeadLetter == nil {
+					return c.fail(ctx, StageProcess, decoded[i], 1, err)
+				}
+				if err := c.deadLetter(ctx, decoded[i], err, attempts); err != nil {
+					return err
+				}
+			} else {
+				c.metric(ctx, Metric{Name: MetricMessagesSuccess, Value: 1})
+			}
+			if err := c.ack(ctx, decoded[i]); err != nil {
+				return err
 			}
 		}
 	}
-	c.metric(ctx, Metric{Name: MetricProcessTime, Duration: time.Since(started)})
-	for _, delivery := range deliveries {
-		if delivery.Ack != nil {
-			started = time.Now()
-			if err := delivery.Ack(); err != nil {
-				c.metric(ctx, Metric{Name: MetricAcknowledgeTime, Duration: time.Since(started), Attributes: deliveryAttributes(delivery)})
-				return c.fail(ctx, StageAcknowledge, delivery, 1, err)
-			}
-			c.metric(ctx, Metric{Name: MetricAcknowledgeTime, Duration: time.Since(started), Attributes: deliveryAttributes(delivery)})
+	return nil
+}
+
+func (c *Consumer[T]) processWithRetry(ctx context.Context, delivery Delivery, count int, process func() error) (int, error) {
+	maxAttempts := c.config.Retry.attempts()
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		started := time.Now()
+		err := process()
+		c.metric(ctx, Metric{Name: MetricProcessTime, Duration: time.Since(started), Attributes: deliveryAttributes(delivery)})
+		if err == nil {
+			return attempt, nil
+		}
+		if ctx.Err() != nil {
+			return attempt, ctx.Err()
+		}
+		if attempt == maxAttempts || !c.config.Retry.shouldRetry(err) {
+			return attempt, err
+		}
+		c.metric(ctx, Metric{Name: MetricMessagesRetried, Value: float64(count), Attributes: deliveryAttributes(delivery)})
+		c.log(ctx, LogDebug, "retrying message processing", Field{Key: "topic", Value: delivery.Topic}, Field{Key: "partition", Value: delivery.Partition}, Field{Key: "offset", Value: delivery.Offset}, Field{Key: "attempt", Value: attempt + 1}, Field{Key: "error", Value: err})
+		if err := c.config.Retry.wait(ctx, attempt); err != nil {
+			return attempt, err
 		}
 	}
-	c.metric(ctx, Metric{Name: MetricMessagesSuccess, Value: float64(len(deliveries))})
+	return maxAttempts, nil
+}
+
+func (c *Consumer[T]) deadLetter(ctx context.Context, delivery Delivery, cause error, attempts int) error {
+	deadLetterDelivery := delivery
+	deadLetterDelivery.Value = append([]byte(nil), delivery.Value...)
+	deadLetterDelivery.Key = append([]byte(nil), delivery.Key...)
+	deadLetterDelivery.Headers = cloneHeaders(delivery.Headers)
+	deadLetterDelivery.Ack = nil
+	failed := FailedDelivery{Delivery: deadLetterDelivery, Cause: cause, Attempts: attempts}
+	if err := c.config.DeadLetter.Handle(ctx, failed); err != nil {
+		return c.fail(ctx, StageDeadLetter, delivery, 1, err)
+	}
+	c.metric(ctx, Metric{Name: MetricMessagesFailed, Value: 1, Attributes: map[string]string{"stage": "exhausted", "topic": delivery.Topic}})
+	c.metric(ctx, Metric{Name: MetricMessagesDeadLettered, Value: 1, Attributes: deliveryAttributes(delivery)})
+	c.log(ctx, LogInfo, "message sent to dead letter handler", Field{Key: "topic", Value: delivery.Topic}, Field{Key: "partition", Value: delivery.Partition}, Field{Key: "offset", Value: delivery.Offset}, Field{Key: "attempts", Value: attempts})
+	return nil
+}
+
+func (c *Consumer[T]) ack(ctx context.Context, delivery Delivery) error {
+	if delivery.Ack == nil {
+		return nil
+	}
+	started := time.Now()
+	err := delivery.Ack()
+	c.metric(ctx, Metric{Name: MetricAcknowledgeTime, Duration: time.Since(started), Attributes: deliveryAttributes(delivery)})
+	if err != nil {
+		return c.fail(ctx, StageAcknowledge, delivery, 1, err)
+	}
 	return nil
 }
 

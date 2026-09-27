@@ -17,6 +17,7 @@ flowchart LR
     subgraph Core[Conduit core]
         Consumer[Typed Consumer]
         Serde[Serde T]
+        Retry[Bounded retry<br/>and backoff]
         Policy[Success-only<br/>acknowledgement]
         Errors[Typed errors]
     end
@@ -25,11 +26,14 @@ flowchart LR
         Processor[Processor T or<br/>BatchProcessor T]
         Metrics[Metrics collector]
         Logger[Structured logger]
+        DLQ[Dead-letter handler]
     end
 
     MQ --> Client --> Convert --> Consumer
     Consumer --> Serde --> Processor
+    Processor -->|retryable failure| Retry --> Processor
     Processor -->|success| Policy --> Client
+    Processor -->|attempts exhausted| DLQ -->|stored| Policy
     Consumer -. observations .-> Metrics
     Consumer -. lifecycle and failures .-> Logger
     Consumer -->|failure| Errors
@@ -43,9 +47,14 @@ flowchart LR
 3. The consumer deserializes the payload with `Serde[T]`.
 4. It invokes `Processor[T]` for individual messages or `BatchProcessor[T]` for
    the complete batch.
-5. Only after successful processing does the consumer call each delivery's
-   `Ack` callback.
-6. Any failure is returned as `*conduit.Error`, recorded by configured
+5. A processor failure is retried according to the configured bounded retry
+   policy. Backoff stops immediately when the run context is cancelled.
+6. After attempts are exhausted, an optional dead-letter handler stores or
+   republishes the failed delivery. Its success permits acknowledgement; its
+   failure leaves the original delivery unacknowledged.
+7. Only after successful processing or dead-letter handling does the consumer
+   call the delivery's `Ack` callback.
+8. Any terminal failure is returned as `*conduit.Error`, recorded by configured
    observability hooks, and left unacknowledged.
 
 ## Delivery semantics
@@ -70,6 +79,7 @@ transport-neutral, but it also means an adapter must clearly document how its
 | `BatchProcessor[T]` | Process a decoded batch atomically from the client's perspective |
 | `Metrics` | Translate stable Conduit observations to any metrics backend |
 | `Logger` | Translate structured lifecycle and failure events to any logging backend |
+| `DeadLetterHandler` | Store or republish deliveries that exhaust processing attempts |
 
 ## Concurrency
 

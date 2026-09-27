@@ -9,6 +9,7 @@ const (
 	StageTransport   ErrorStage = "transport"
 	StageDeserialize ErrorStage = "deserialize"
 	StageProcess     ErrorStage = "process"
+	StageDeadLetter  ErrorStage = "dead_letter"
 	StageAcknowledge ErrorStage = "acknowledge"
 )
 
